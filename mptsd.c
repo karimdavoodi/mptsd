@@ -15,11 +15,12 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
  */
+
 #include <stdlib.h>
 #include <unistd.h>
 #include <signal.h>
 #include <errno.h>
-
+//#include <mcheck.h>
 #include "libfuncs/libfuncs.h"
 
 #include "libtsfuncs/tsfuncs.h"
@@ -32,17 +33,13 @@
 #include "output.h"
 #include "web_server.h"
 
-#define PROGRAM_NAME "ux-mptsd"
+#define PROGRAM_NAME "mptsd"
 
-#ifdef BUILD_ID
 const char *program_id = PROGRAM_NAME " " GIT_VER " build " BUILD_ID;
-#else
-const char *program_id = PROGRAM_NAME " " GIT_VER;
-#endif
 
 char *server_sig = PROGRAM_NAME;
 char *server_ver = GIT_VER;
-char *copyright  = "Copyright (C) 2010-2011 Unix Solutions Ltd.";
+char *copyright  = "Copyright (C) 2014-2015 MoojAfzar.";
 
 CONFIG *config;
 int keep_going = 1;
@@ -80,7 +77,7 @@ void spawn_input_threads(CONFIG *conf) {
 			}
 		}
 	}
-	LOGf("INPUT : %d thread%s spawned.\n", spawned, spawned > 1 ? "s" : "");
+	//LOGf("INPUT : %d thread%s spawned.\n", spawned, spawned > 1 ? "s" : "");
 }
 
 void spawn_output_threads(CONFIG *conf) {
@@ -111,46 +108,64 @@ void kill_threads(CONFIG *conf) {
 	conf->output->dienow = 1;
 	while (conf->inputs->items || conf->output->dienow < 4) {
 		usleep(50000);
-		if (loops++ > 60) // 3 seconds
+		if (loops++ > 60) // 3 seconds   
 			exit(0);
 	}
 }
 
-/*
-void do_reconnect(CONFIG *conf) {
+void do_reconnect() {
 	LNODE *l, *tmp;
-	list_lock(conf->inputs);
-	list_for_each(conf->inputs, l, tmp) {
+	LOGf("RECONNEC................\n");
+	list_lock(config->inputs);
+	list_for_each(config->inputs, l, tmp) {
 		INPUT *r = l->data;
 		r->reconnect = 1;
 	}
-	list_unlock(conf->inputs);
+	list_unlock(config->inputs);
 }
 
 void do_reconf(CONFIG *conf) {
 //	load_channels_config();
 	spawn_input_threads(conf);
 }
-*/
+
 
 void signal_quit(int sig) {
 	rcvsig = sig;
 	keep_going = 0;
 }
 
-void init_signals(void) {
+void init_signals() {
 	signal(SIGCHLD, SIG_IGN);
 	signal(SIGPIPE, SIG_IGN);
 
 //	signal(SIGHUP , do_reconf);
-//	signal(SIGUSR1, do_reconnect);
-
+	signal(SIGUSR1, do_reconnect);
 	signal(SIGINT , signal_quit);
 	signal(SIGTERM, signal_quit);
 }
 
+#include "lic.c"
 int main(int argc, char **argv) {
-	set_http_response_server_ident(server_sig, server_ver);
+	//mtrace();
+	//LNODE *l, *tmp;
+	long b = 0;
+
+	openlog("mptsd",LOG_CONS | LOG_NDELAY | LOG_PID, LOG_LOCAL0);
+
+	
+	if(license_capability_long("LVS_Output_RF",&b)){
+		if(b/10 <= 0){
+			LOGf("RF Module License!");
+			return 0;
+		}
+	}else{
+		LOGf("License Error!");
+		return 0;
+	}
+	
+	init_signals(config);
+	//set_http_response_server_ident(server_sig, server_ver);
 	ts_set_log_func(LOG);
 
 	config = config_alloc();
@@ -159,25 +174,24 @@ int main(int argc, char **argv) {
 	output_psi_init(config, config->output);
 
 	daemonize(config->pidfile);
-	web_server_start(config);
-	log_init(config->logident, config->syslog_active, config->pidfile == NULL, config->loghost, config->logport);
-	init_signals();
+	//web_server_start(config);
+	//log_init(config->logident, config->syslog_active, config->pidfile == NULL, config->loghost, config->logport);
 
-	LOGf("INIT  : %s %s (%s)\n" , server_sig, server_ver, config->ident);
-
+	//LOGf("INIT  : %s %s (%s)\n" , server_sig, server_ver, config->ident);
 	connect_output(config->output);
 	spawn_input_threads(config);
 	spawn_output_threads(config);
-
-	do { usleep(50000); } while(keep_going);
+	do { 
+		usleep(500000); 
+	} while(keep_going);
 
 	kill_threads(config);
-	web_server_stop(config);
 
-	LOGf("SHUTDOWN: Signal %d | %s %s (%s)\n", rcvsig, server_sig, server_ver, config->ident);
+	//web_server_stop(config);
+	//LOGf("SHUTDOWN: Signal %d | %s %s (%s)\n", rcvsig, server_sig, server_ver, config->ident);
 	config_free(&config);
 
 	log_close();
-
+	closelog();
 	exit(0);
 }

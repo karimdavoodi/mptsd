@@ -73,8 +73,8 @@ static void output_psi_init_nit(CONFIG *conf, OUTPUT *o) {
 		}
 		list_unlock(conf->channels);
 		ts_nit_add_service_list_descriptor(nit, conf->transport_stream_id, conf->network_id, services, num);
-		free(freqs);
-		free(services);
+		FREE(freqs);
+		FREE(services);
 	} else {
 		LOG("CONF  : Too much items in the NIT, maximum is 64! NIT not generated.\n");
 	}
@@ -96,7 +96,7 @@ static void output_psi_init_sdt(CONFIG *conf, OUTPUT *o) {
 }
 
 static void output_psi_init_tdt_tot(CONFIG *conf, OUTPUT *o) {
-	(void)conf; // Silence warning
+	conf = conf; // Silence warning
 	o->pid_tdt_cont = 15;
 	o->tdt = ts_tdt_alloc_init(time(NULL));
 	o->tot = ts_tot_alloc_init(time(NULL));
@@ -226,10 +226,12 @@ static void output_psi_add(CONFIG *conf, OUTPUT *o, struct timeval *now) {
 		o->tot_ts = *now;
 		output_add_tot(o);
 	}
+#ifdef KD_MYEPG
 	if (timeval_diff_msec(&o->eit_ts, now) >= conf->timeouts.eit) {
 		o->eit_ts = *now;
 		output_add_eit(conf, o);
 	}
+#endif	
 }
 
 
@@ -260,7 +262,7 @@ void * output_handle_psi(void *_config) {
 		output_psi_add(conf, o, &now);
 		usleep(10000); // 10 ms
 	}
-	LOG("OUTPUT: PSI thread stopped.\n");
+	//LOG("OUTPUT: PSI thread stopped.\n");
 	o->dienow++;
 	return 0;
 }

@@ -1,31 +1,22 @@
-/*
- * mptsd configuration header file
- * Copyright (C) 2010-2011 Unix Solutions Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
- */
 #ifndef CONFIG_H
 #define CONFIG_H
 
 #include <pthread.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <syslog.h>
+#define  KD_TD  1
+#define  KD_MYEPG 1 
+
+
+//#define  KD_PCR 1
+//#define  KD_HLS 1	 /*timeshift*/
 
 #include "libfuncs/list.h"
 
 #include "data.h"
 
+//#define FREE(x) do{if(x) { free(x); x=NULL; }while(0)
 typedef struct {
 	char			*ident;
 	char			*pidfile;
@@ -86,6 +77,7 @@ typedef struct {
 		unsigned int	tot;			// DVB section id 0x73 (time_offset_section)
 		unsigned int	stats;			// Local
 	} timeouts;
+	
 } CONFIG;
 
 
@@ -98,4 +90,5 @@ int			config_load_channels	(CONFIG *conf);
 int			config_load_nit			(CONFIG *conf);
 int			config_load_epg			(CONFIG *conf);
 
+void file_write(CONFIG *conf,float pad);
 #endif

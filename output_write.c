@@ -16,12 +16,12 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
  */
 #include <unistd.h>
+#include <stdio.h>
 #include <string.h>
 #include <signal.h>
 #include <sys/time.h>
 #include <errno.h>
 #include <math.h>
-#include <inttypes.h>
 
 #include "libfuncs/io.h"
 #include "libfuncs/log.h"
@@ -42,7 +42,7 @@ void increase_process_priority() {
 	if (sched_setscheduler(0, SCHED_FIFO, &param)==-1) {
 		log_perror("sched_setscheduler() failed!", errno);
 	} else {
-		LOGf("PRIO : sched_setschedule() succeded.\n");
+		//LOGf("PRIO : sched_setschedule() succeded.\n");
 	}
 #endif
 }
@@ -51,6 +51,7 @@ void ts_frame_process(CONFIG *conf, OUTPUT *o, uint8_t *data) {
 	int i;
 	uint16_t pid;
 	uint8_t *ts_packet;
+	long reset = time(NULL) % 300; // KDKD  restart new_pcr!!! for LG 
 	for (i=0; i<FRAME_PACKET_SIZE; i+=TS_PACKET_SIZE) {
 		ts_packet = data + i;
 		pid = ts_packet_get_pid(ts_packet);
@@ -63,35 +64,35 @@ void ts_frame_process(CONFIG *conf, OUTPUT *o, uint8_t *data) {
 			uint64_t new_pcr = pcr;
 			uint64_t bytes = o->traffic + i;
 
-			if (o->last_pcr[pid]) {
+			if (o->last_pcr[pid] && reset!=1) {
 				uint64_t old_pcr     = o->last_pcr[pid];
 				uint64_t old_org_pcr = o->last_org_pcr[pid];
 				uint64_t old_bytes   = o->last_traffic[pid];
 				if (old_org_pcr < pcr) { // Detect PCR wraparound
-					new_pcr = old_pcr + (double)((bytes - old_bytes) * 8 * 27000000) / o->output_bitrate;
+					new_pcr = old_pcr + (double)((bytes - old_bytes) * 8.0 * 27000000.0) / o->output_bitrate;
 					// Rewrite pcrs || Move pcrs & rewrite prcs
 					if (conf->pcr_mode == 2 || conf->pcr_mode == 3) {
 						ts_packet_set_pcr(ts_packet, new_pcr);
 					}
-					if (conf->debug) {
+					if (conf->debug ) { 
 						uint64_t ts_rate = (double)(((bytes - old_bytes) * 8) * 27000000) / (pcr - old_org_pcr);
 						uint64_t ts_rate_new = (double)(((bytes - old_bytes) * 8) * 27000000) / (new_pcr - old_pcr);
-						LOGf("PCR[%03x]: old:%14" PRIu64 " new:%14" PRIu64 " pcr_diff:%8" PRId64 " ts_rate:%9" PRIu64 " ts_rate_new:%9" PRIu64 " diff:%9" PRId64 " | passed:%" PRIu64 "\n",
+						LOGf("PCR[%03x]: old:%14llu new:%14llu pcr_diff:%8lld ts_rate:%9llu ts_rate_new:%9llu diff:%9lld | passed:%llu\n",
 							pid,
-							pcr,
-							new_pcr,
-							pcr - new_pcr,
-							ts_rate,
-							ts_rate_new,
-							ts_rate - ts_rate_new,
-							bytes - old_bytes
+							(long long unsigned int)pcr,
+							(long long int)new_pcr,
+							(long long unsigned int)pcr - new_pcr,
+							(long long unsigned int)ts_rate,
+							(long long unsigned int)ts_rate_new,
+							(long long int)ts_rate - ts_rate_new,
+							(long long unsigned int)bytes - old_bytes
 						);
 					}
  				}
 			} else {
-//				if (config->debug) {
-//					LOGf("PCR[%03x]: %10llu init\n", pid, pcr);
-//				}
+				if (conf->debug) {
+					LOGf("PCR[%03x]: %10llu init\n", pid, (long long unsigned int)pcr);
+				}
 			}
 			o->last_pcr[pid] = new_pcr;
 			o->last_org_pcr[pid] = pcr;
@@ -99,25 +100,64 @@ void ts_frame_process(CONFIG *conf, OUTPUT *o, uint8_t *data) {
 		}
 	}
 }
-
-ssize_t ts_frame_write(OUTPUT *o, uint8_t *data) {
+/*
+ssize_t ts_frame_write_net(OUTPUT *o, uint8_t *data) {
 	ssize_t written;
-	written = fdwrite(o->out_sock, (char *)data, FRAME_PACKET_SIZE);
+	// KDKD remove null packets for network 
+	uint8_t pkt[FRAME_PACKET_SIZE];
+	uint8_t *ts_packet;
+	int i,j;
+	j = 0;
+	for (i=0; i<FRAME_PACKET_SIZE; i+=TS_PACKET_SIZE) {
+		ts_packet = data + i;
+		if (ts_packet_get_pid(ts_packet) == 0x1fff) // NULL packet
+			continue;
+		memcpy(pkt+j,ts_packet,TS_PACKET_SIZE);
+		j += TS_PACKET_SIZE;
+	}
+
+	written = fdwrite(o->out_sock, (char *)pkt, j);
+	written = FRAME_PACKET_SIZE;  // FIXME 
 	if (written >= 0) {
 		o->traffic        += written;
 		o->traffic_period += written;
 	}
-
 	if (o->ofd)
 		write(o->ofd, data, FRAME_PACKET_SIZE);
 
 	return written;
+}
+*/
+ssize_t ts_frame_write(OUTPUT *o, uint8_t *data) {
+	ssize_t written;
+	written = fdwrite(o->out_sock, (char *)data, FRAME_PACKET_SIZE);
+	if (written >= 0) {  
+		o->traffic        += written;
+		o->traffic_period += written;
+	}
+	if (o->ofd)
+		write(o->ofd, data, FRAME_PACKET_SIZE);
+
+	return written;
+}
+//KDKD write to file
+void padding_file_write(CONFIG *conf,float pad)
+{
+	FILE *f;
+	char name[80];
+	sprintf(name,"/opt/sms/tmp/padding_%s.txt",conf->channels_conf); 
+	f = fopen(name,"w");
+	if(f != NULL){
+		fprintf(f,"%d\n",(int)pad);
+		fclose(f);
+	}
 }
 
 void * output_handle_write(void *_config) {
 	CONFIG *conf = _config;
 	OUTPUT *o = conf->output;
 	int buf_in_use = 0;
+	//	unsigned int o_datasize = 0;
 	struct timeval stats_ts, now;
 	struct timeval start_write_ts, end_write_ts, used_ts;
 	unsigned long long stats_interval;
@@ -141,22 +181,27 @@ void * output_handle_write(void *_config) {
 
 		// Show stats
 		stats_interval = timeval_diff_msec(&stats_ts, &now);
-		if (stats_interval > conf->timeouts.stats) {
+		if ( stats_interval > conf->timeouts.stats) { 
 			stats_ts = now;
 			double out_kbps = (double)(o->traffic_period * 8) / 1000;
 			double out_mbps = (double)out_kbps / 1000;
 			double opadding = ((double)o->padding_period / o->traffic_period) * 100;
-
+			padding_file_write(conf,opadding);
+			if( opadding>100 || opadding<0 ){
+				//LOGf("Padding problem!");
+				//raise(SIGUSR1);
+			}
 			if (!conf->quiet) {
-				LOGf("STAT  : Pad:%6.2f%% Traf:%5.2f Mbps | %8.2f | %7" PRIu64 "\n",
-					opadding,
-					out_mbps,
-					out_kbps,
-					o->traffic_period
-				);
+				LOGf("STAT  : Pad:%6.2f%% Traf:%5.2f Mbps | %8.2f | %7llu\n",
+					 opadding,
+					 out_mbps,
+					 out_kbps,
+					 (long long unsigned int)o->traffic_period
+					);
 			}
 			o->traffic_period = 0;
 			o->padding_period = 0;
+			//			o_datasize = 0;
 		}
 
 		gettimeofday(&start_write_ts, NULL);
@@ -169,7 +214,13 @@ void * output_handle_write(void *_config) {
 			long sleep_interval = conf->output_tmout;
 			uint8_t *ts_frame = curbuf->buf + curbuf->written;
 			ts_frame_process(conf, o, ts_frame);	// Fix PCR and count NULL packets
-			written += ts_frame_write(o, ts_frame);	// Write packet to network/file
+			/* KDKD select NET or RF write */
+			//LOGf("out: %X \n",o->out_host.s_addr);
+			if(o->out_host.s_addr == 0x100007F ) /* torf */
+				written += ts_frame_write(o, ts_frame);	// Write packet to network/file
+			else
+				written += ts_frame_write(o, ts_frame);	// Write packet to network/file
+				//written += ts_frame_write_net(o, ts_frame);	// Write packet to network/file
 			curbuf->written += FRAME_PACKET_SIZE;
 			if (packets_written) {
 				time_taken = timeval_diff_usec(&start_write_ts, &used_ts);
@@ -177,16 +228,16 @@ void * output_handle_write(void *_config) {
 				time_diff = real_time - time_taken;
 				overhead = (time_taken / packets_written) - sleep_interval;
 				overhead_total += overhead;
-/*
-				LOGf("[%5d] time_taken:%5ld real_time:%5ld time_diff:%ld | overhead:%5ld overhead_total:%5ld\n",
-					packets_written,
-					time_taken,
-					real_time,
-					time_diff,
-					overhead,
-					overhead_total
-				);
-*/
+				/*
+				   LOGf("[%5d] time_taken:%5ld real_time:%5ld time_diff:%ld | overhead:%5ld overhead_total:%5ld\n",
+				   packets_written,
+				   time_taken,
+				   real_time,
+				   time_diff,
+				   overhead,
+				   overhead_total
+				   );
+				 */
 				if (time_diff > real_sleep_time) {
 					sleep_interval = time_diff - conf->usleep_overhead;
 					if (sleep_interval < 0)
@@ -215,13 +266,13 @@ void * output_handle_write(void *_config) {
 		obuf_reset(curbuf); // Buffer us all used up
 		buf_in_use = buf_in_use ? 0 : 1; // Switch buffer
 		if (written < 0) {
-			LOG("OUTPUT: Error writing into output socket.\n");
+			//LOGf("Error writing into torf(%d)!\n",o->out_port - 1200);
 			shutdown_fd(&o->out_sock);
 			connect_output(o);
 		}
 	}
 OUT:
-	LOG("OUTPUT: WRITE thread stopped.\n");
+	//LOG("OUTPUT: WRITE thread stopped.\n");
 	o->dienow++;
 	return 0;
 }

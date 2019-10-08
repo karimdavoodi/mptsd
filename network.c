@@ -16,6 +16,12 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
  */
 #include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <linux/hdreg.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
@@ -126,7 +132,6 @@ int connect_source(INPUT *r, int retries, int readbuflen, int *http_code) {
 	}
 	r->connected = 0;
 	r->reconnect = 0;
-
 	int active = 1;
 	int dret = async_resolve_host(src->host, src->port, &(r->src_sockname), 5000, &active);
 	if (dret != 0) {
@@ -137,8 +142,6 @@ int connect_source(INPUT *r, int retries, int readbuflen, int *http_code) {
 		DO_RECONNECT;
 	}
 
-	proxy_log(r, "Connecting");
-
 	char buf[1024];
 	*http_code = 0;
 	if (src->sproto == tcp_sock) {
@@ -147,7 +150,7 @@ int connect_source(INPUT *r, int retries, int readbuflen, int *http_code) {
 			log_perror("play(): Could not create SOCK_STREAM socket.", errno);
 			FATAL_ERROR;
 		}
-		//proxy_log(r, "Add");
+		proxy_log(r, "Add");
 		if (do_connect(r->sock, (struct sockaddr *)&(r->src_sockname), sizeof(r->src_sockname), PROXY_CONNECT_TIMEOUT) < 0) {
 			LOGf("ERR  : Error connecting to %s srv_fd: %i err: %s\n", r->channel->source, r->sock, strerror(errno));
 			DO_RECONNECT;
@@ -170,7 +173,7 @@ int connect_source(INPUT *r, int retries, int readbuflen, int *http_code) {
 				regcomp(&http_response, "^HTTP/1.[0-1] (([0-9]{3}) .*)", REG_EXTENDED);
 				if (regexec(&http_response,buf,3,res,0) != REG_NOMATCH) {
 					char codestr[4];
-					if ((unsigned int)res[1].rm_eo-res[1].rm_so < (unsigned int)sizeof(xresponse)) {
+					if ((unsigned int)res[1].rm_eo-res[1].rm_so < sizeof(xresponse)) {
 						strncpy(xresponse, &buf[res[1].rm_so], res[1].rm_eo-res[1].rm_so);
 						xresponse[res[1].rm_eo-res[1].rm_so] = '\0';
 						chomp(xresponse);
@@ -202,13 +205,6 @@ int connect_source(INPUT *r, int retries, int readbuflen, int *http_code) {
 		}
 		// connected ok, continue
 	} else {
-
-		char multicast = IN_MULTICAST(ntohl(r->src_sockname.sin_addr.s_addr));
-		
-		//if (!IN_MULTICAST(ntohl(r->src_sockname.sin_addr.s_addr))) {
-		//	LOGf("ERR  : %s is not multicast address\n", r->channel->source);
-		//	FATAL_ERROR;
-		//}
 		struct ip_mreq mreq;
 		struct sockaddr_in receiving_from;
 
@@ -217,27 +213,34 @@ int connect_source(INPUT *r, int retries, int readbuflen, int *http_code) {
 			log_perror("play(): Could not create SOCK_DGRAM socket.", errno);
 			FATAL_ERROR;
 		}
-		// LOGf("CONN : Listening on multicast socket %s srv_fd: %i retries left: %i\n", r->channel->source, r->sock, retries);
-		int on = 1;
-		setsockopt(r->sock, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
-		
-		if (multicast)  {
-    		// subscribe to multicast group
-    		memcpy(&mreq.imr_multiaddr, &(r->src_sockname.sin_addr), sizeof(struct in_addr));
-    		mreq.imr_interface.s_addr = htonl(INADDR_ANY);
-    		if (setsockopt(r->sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
-    			LOGf("ERR  : Failed to add IP membership on %s srv_fd: %i\n", r->channel->source, r->sock);
-    			FATAL_ERROR;
-    		}
-		}
-		// bind to the socket so data can be read
-		memset(&receiving_from, 0, sizeof(receiving_from));
-		receiving_from.sin_family = AF_INET;
-		receiving_from.sin_addr   = r->src_sockname.sin_addr;
-		receiving_from.sin_port   = htons(src->port);
-		if (bind(r->sock, (struct sockaddr *) &receiving_from, sizeof(receiving_from)) < 0) {
-			LOGf("ERR  : Failed to bind to %s srv_fd: %i\n", r->channel->source, r->sock);
-			FATAL_ERROR;
+		if (IN_MULTICAST(ntohl(r->src_sockname.sin_addr.s_addr))) {
+			int on = 1;
+			setsockopt(r->sock, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+			// subscribe to multicast group
+			memcpy(&mreq.imr_multiaddr, &(r->src_sockname.sin_addr), sizeof(struct in_addr));
+			mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+			if (setsockopt(r->sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq)) < 0) {
+				LOGf("ERR  : Failed to add IP membership on %s srv_fd: %i\n", r->channel->source, r->sock);
+				//FATAL_ERROR;  //KDKD
+			}
+			// bind to the socket so data can be read
+			memset(&receiving_from, 0, sizeof(receiving_from));
+			receiving_from.sin_family = AF_INET;
+			receiving_from.sin_addr   = r->src_sockname.sin_addr;
+			receiving_from.sin_port   = htons(src->port);
+			if (bind(r->sock, (struct sockaddr *) &receiving_from, sizeof(receiving_from)) < 0) {
+				LOGf("ERR  : Failed to bind to %s srv_fd: %i\n", r->channel->source, r->sock);
+				FATAL_ERROR;
+			}
+		}else{ // unicast
+			memset(&receiving_from, 0, sizeof(receiving_from));
+			receiving_from.sin_family = AF_INET;
+			receiving_from.sin_addr.s_addr   = htonl(INADDR_ANY);
+			receiving_from.sin_port   = htons(src->port);
+			if (bind(r->sock, (struct sockaddr *) &receiving_from, sizeof(receiving_from)) < 0) {
+				LOGf("ERR  : Failed to bind to %s srv_fd: %i\n", r->channel->source, r->sock);
+				FATAL_ERROR;
+			}
 		}
 	}
 
@@ -246,15 +249,14 @@ int connect_source(INPUT *r, int retries, int readbuflen, int *http_code) {
 
 	r->connected = 1;
 
-//	proxy_log(r, "Connected");
+	//proxy_log(r, "Connected .");
 	chansrc_free(&src);
 	return 0;
 }
-
 /*         Start: 3 seconds on connect */
 /* In connection: Max UDP timeout == 3 seconds (read) + 2 seconds (connect) == 5 seconds */
 #define UDP_READ_RETRIES 3
-#define UDP_READ_TIMEOUT 1000
+#define UDP_READ_TIMEOUT 1000   //KDKD 1000->2000
 
 /*         Start: 1/4 seconds on connect */
 /* In connection: Max TCP timeout == 5 seconds (read) + 2 seconds (connect)             == 7 seconds */
@@ -263,10 +265,10 @@ int connect_source(INPUT *r, int retries, int readbuflen, int *http_code) {
 #define TCP_READ_TIMEOUT 1000
 
 /*
-	Returns:
-		0 = synced ok
-		1 = not synced, reconnect
-*/
+Returns:
+0 = synced ok
+1 = not synced, reconnect
+ */
 int mpeg_sync(INPUT *r, channel_source source_proto) {
 	time_t sync_start = time(NULL);
 	unsigned int sync_packets = 0;
@@ -284,15 +286,15 @@ int mpeg_sync(INPUT *r, channel_source source_proto) {
 			return 1;
 resync:
 		if (fdread_ex(r->sock, syncframe, 1, _timeout, _retries, 1) != 1) {
-			proxy_log(r, "mpeg_sync fdread() timeoutA");
+			//proxy_log(r, "mpeg_sync timeoutA");
 			return 1; // reconnect
 		}
-		// LOGf("DEBUG:     Read 0x%02x Offset %u Sync: %u\n", (uint8_t)syncframe[0], read_bytes, sync_packets);
+		//LOGf("DEBUG:     Read 0x%02x Offset %u Sync: %u\n", (uint8_t)syncframe[0], read_bytes, sync_packets);
 		read_bytes++;
 		if (syncframe[0] == 0x47) {
 			ssize_t rdsz = fdread_ex(r->sock, syncframe, 188-1, _timeout, _retries, 1);
 			if (rdsz != 188-1) {
-				proxy_log(r, "mpeg_sync fdread() timeoutB");
+				//proxy_log(r, "mpeg_sync timeoutB");
 				return 1; // reconnect
 			}
 			read_bytes += 188-1;

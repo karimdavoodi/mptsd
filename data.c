@@ -88,7 +88,7 @@ void chansrc_free(CHANSRC **purl) {
 	}
 };
 
-void chansrc_add(CHANNEL *c, const char *src) {
+void chansrc_add(CHANNEL *c, char *src) {
 	if (c->num_src >= MAX_CHANNEL_SOURCES-1)
 		return;
 	c->sources[c->num_src] = strdup(src);
@@ -100,55 +100,56 @@ void chansrc_add(CHANNEL *c, const char *src) {
 void chansrc_next(CHANNEL *c) {
 	if (c->num_src <= 1)
 		return;
-	// uint8_t old_src = c->curr_src;
+	uint8_t old_src = c->curr_src;
 	c->curr_src++;
 	if (c->curr_src >= MAX_CHANNEL_SOURCES-1 || c->sources[c->curr_src] == NULL)
 		c->curr_src = 0;
 	c->source = c->sources[c->curr_src];
-	// LOGf("CHAN : Switch source | Channel: %s OldSrc: %d %s NewSrc: %d %s\n", c->name, old_src, c->sources[old_src], c->curr_src, c->source);
+	LOGf("CHAN : Switch source | Channel: %s OldSrc: %d %s NewSrc: %d %s\n", c->name, old_src, c->sources[old_src], c->curr_src, c->source);
 }
 
 void chansrc_set(CHANNEL *c, uint8_t src_id) {
 	if (src_id >= MAX_CHANNEL_SOURCES-1 || c->sources[src_id] == NULL)
 		return;
-	// uint8_t old_src = c->curr_src;
+	uint8_t old_src = c->curr_src;
 	c->curr_src = src_id;
 	c->source = c->sources[c->curr_src];
-	// LOGf("CHAN : Set source    | Channel: %s OldSrc: %d %s NewSrc: %d %s\n", c->name, old_src, c->sources[old_src], c->curr_src, c->source);
+	LOGf("CHAN : Set source    | Channel: %s OldSrc: %d %s NewSrc: %d %s\n", c->name, old_src, c->sources[old_src], c->curr_src, c->source);
 }
 
 
 
 
 
-CHANNEL *channel_new(int service_id, int is_radio, const char *id, const char *name, const char *source, int channel_index){
-
-    if (channel_index<=0 || channel_index>=256)
-    {
-        
-	    LOGf("CONFIG: Error channel_new invalid index %d\n", channel_index);
-        return NULL;
-    }
-    //LOGf("CONFIG: ------------------channel_new() serviceid %d id %s name %s source %s index %d\n", service_id, id, name , source , channel_index);
-    
+CHANNEL *channel_new(int service_id, int is_radio, char *id, char *name, char *source,int
+					 teletext,int subtitle,int record,int live) {
 	CHANNEL *c = calloc(1, sizeof(CHANNEL));
 	c->service_id = service_id;
 	c->radio = is_radio;
-	c->index = channel_index;
-	c->base_pid = c->index * 32; // The first pid is saved for PMT , channel_index must > 0
+	c->teletext = teletext;
+	c->subtitle = subtitle;
+	c->record = record;
+	c->live = live;
+	c->base_pid = service_id * 1; // The first pid is saved for PMT
 	c->pmt_pid = c->base_pid; // The first pid is saved for PMT
 	c->id = strdup(id);
 	c->name = strdup(name);
 	chansrc_add(c, source);
-
-
+	c->epg_now = NULL;
+	c->epg_next = NULL;
+	pthread_mutex_init(&c->eit_mutex, NULL);
 	return c;
 }
 
 void channel_free_epg(CHANNEL *c) {
-	epg_free(&c->epg_now);
-	epg_free(&c->epg_next);
+	//epg_free(c->epg_now);
+	//epg_free(c->epg_next);
+	// FIXME 
+	//LOGf("FREE %p %p",c->epg_now,c->epg_next);
+	FREE(c->epg_now);
+	FREE(c->epg_next);
 
+	//LOGf("FREE %p %p",c->eit_now,c->eit_next);
 	ts_eit_free(&c->eit_now);
 	ts_eit_free(&c->eit_next);
 }
@@ -169,33 +170,68 @@ void channel_free(CHANNEL **pc) {
 }
 
 
-EPG_ENTRY *epg_new(time_t start, int duration, char *encoding, char *event, char *short_desc, char *long_desc) {
-	EPG_ENTRY *e;
+void copy_epg_text(char *event,char *short_desc,char *long_desc,EPG_ENTRY *e,int encode)
+{
+	if(event){
+		e->event[0] = encode; 
+		strncpy(e->event+1, event,250);
+	}else{ 
+		e->event[0] = 0;
+		e->event[1] = 0;
+	}
+	if(short_desc){
+		e->short_desc[0] = encode; 
+		strncpy(e->short_desc+1, short_desc,250);
+	}else{ 
+		e->short_desc[0] = 0;
+		e->short_desc[1] = 0;
+	}
+	if(long_desc){
+		e->long_desc[0] = encode; 
+		strncpy(e->long_desc+1, long_desc,250);
+	}else{ 
+		e->long_desc[0] = 0;
+		e->long_desc[1] = 0;
+	}
+}
+EPG_ENTRY *epg_new(EPG_ENTRY *e, time_t start, int duration, char *encoding,
+				   int encoding_code, char *event, 
+				   char *short_desc, char *long_desc,char *lang) {
 	if (!event)
 		return NULL;
-	e             = calloc(1, sizeof(EPG_ENTRY));
+	//e             = calloc(1, sizeof(EPG_ENTRY));
+	//LOGf("new Alloc %p\n",e);
+	memset(e,0,sizeof(EPG_ENTRY));
 	e->event_id   = (start / 60) &~ 0xffff0000;
 	e->start      = start;
 	e->duration   = duration;
-	if (encoding && strcmp(encoding, "iso-8859-5")==0) {
-		e->event      = init_dvb_string_iso_8859_5(event);
-		e->short_desc = init_dvb_string_iso_8859_5(short_desc);
-		e->long_desc  = init_dvb_string_iso_8859_5(long_desc);
-	} else {	// Default is utf-8
-		e->event      = init_dvb_string_utf8(event);
-		e->short_desc = init_dvb_string_utf8(short_desc);
-		e->long_desc  = init_dvb_string_utf8(long_desc);
+	if(encoding){
+		//e->long_desc  = init_dvb_string_custome(long_desc,encoding_code);
+		if(strcmp(encoding, "iso-8859-5")==0) {
+			copy_epg_text(event,short_desc,long_desc,e,1);
+		}else if(strcmp(encoding, "custome")==0){
+			copy_epg_text(event,short_desc,long_desc,e,encoding_code);
+		}else{
+			copy_epg_text(event,short_desc,long_desc,e,0x10);
+		} 
+	}else{
+		copy_epg_text(event,short_desc,long_desc,e,0x15);
 	}
+	if(lang && strlen(lang)==3)
+		strcpy(e->iso_lang,lang);
+	else
+		strcpy(e->iso_lang,"ira");
 	return e;
 }
 
-void epg_free(EPG_ENTRY **pe) {
-	EPG_ENTRY *e = *pe;
+void epg_free(EPG_ENTRY *pe) {
+	EPG_ENTRY *e = pe;
 	if (e) {
-		FREE(e->event);
-		FREE(e->short_desc);
-		FREE(e->long_desc);
-		FREE(*pe);
+		//LOGf("%p %p %p %p ",e->event,e->short_desc,e->long_desc,pe);
+		//FREE(e->event);
+		//FREE(e->short_desc);
+		//FREE(e->long_desc);
+		//FREE(pe);
 	}
 }
 
@@ -256,7 +292,7 @@ INPUT * input_new(const char *name, CHANNEL *channel) {
 		FREE(tmp);
 	}
 
-	r->buf = cbuf_init(1428 * 1316, channel->id); // ~ 10000 x 188
+	r->buf = cbuf_init(2 * 1428 * 1316, channel->id); // ~ 10000 x 188   // KDKD 2* 
 
 	input_stream_alloc(r);
 
@@ -286,9 +322,9 @@ void input_free(INPUT **pinput) {
 
 OUTPUT *output_new() {
 	OUTPUT *o = calloc(1, sizeof(OUTPUT));
-	o->obuf_ms = 100;
+	o->obuf_ms = 100;   /* KDKD 100 -> 2000 */
 
-	o->psibuf = cbuf_init(50 * 1316, "psi");
+	o->psibuf = cbuf_init(50 * 1316, "psi");   
 	if (!o->psibuf) {
 		LOGf("ERROR: Can't allocate PSI input buffer\n");
 		exit(1);
@@ -325,7 +361,7 @@ void output_buffer_alloc(OUTPUT *o, double output_bitrate) {
 
 	long pps  = ceil((double)output_bitrate / (FRAME_PACKET_SIZE * 8));	// Packets per second
 	long ppms = ceil((double)pps / ((double)1000 / o->obuf_ms));		// Packets per o->buffer_ms miliseconds
-	long obuf_size = ppms * 1316;
+	long obuf_size = ppms * 1316 ;  
 
 	o->obuf[0].size   = obuf_size;
 	o->obuf[0].status = obuf_empty;
@@ -336,11 +372,13 @@ void output_buffer_alloc(OUTPUT *o, double output_bitrate) {
 	o->obuf[1].status = obuf_empty;
 	o->obuf[1].buf    = malloc(o->obuf[0].size);
 	obuf_reset(&o->obuf[1]);
-
-	LOGf("\tOutput buf size   : %ld * 2 = %ld\n", obuf_size, obuf_size * 2);
-	LOGf("\tOutput buf packets: %ld (188 bytes)\n", obuf_size / 188);
-	LOGf("\tOutput buf frames : %ld (1316 bytes)\n", obuf_size / 1316);
-	LOGf("\tOutput buf ms     : %u ms\n", o->obuf_ms);
+/*
+	LOGf("Output buf size   : %ld \n", obuf_size );
+	LOGf("Output buf packets: %ld (188 bytes)\n", obuf_size / 188);
+	LOGf("Output buf frames : %ld (1316 bytes)\n", obuf_size / 1316);
+	LOGf("Output buf ms     : %u ms\n", o->obuf_ms);
+	LOGf("Output pps , ppms, bitrate : %ld, %ld, %5.1f \n", pps,ppms,output_bitrate);
+*/
 }
 
 void output_free(OUTPUT **po) {
@@ -416,7 +454,7 @@ void proxy_log(INPUT *r, char *msg) {
 }
 
 void proxy_close(LIST *inputs, INPUT **input) {
-	proxy_log(*input, "Stop");
+	//proxy_log(*input, "Stop");
 	// If there are no clients left, no "Timeout" messages will be logged
 	list_del_entry(inputs, *input);
 	input_free(input);

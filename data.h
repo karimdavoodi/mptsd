@@ -25,7 +25,8 @@
 #define PROXY_RETRY_TIMEOUT 1000
 
 /* 7 * 188 */
-#define FRAME_PACKET_SIZE 1316
+#define FRAME_PACKET_SIZE 1316   
+#define FRAME_PACKET_SIZE_MAX 67680  // KDKD (360*188)
 
 #define RTP_HEADER_SIZE 12
 
@@ -52,18 +53,27 @@ typedef struct {
 	uint16_t	event_id;
 	time_t		start;
 	int			duration;
-	char *		event;
-	char *		short_desc;
-	char *		long_desc;
+	char		iso_lang[5]; /* KDKD */
+	char 		event[255];
+	char 		short_desc[255];
+	char 		long_desc[255];
 } EPG_ENTRY;
+struct my_eit {
+	uint8_t pkt[4096];
+	int  len;
+	int  pos;
+};
 
 typedef struct {
 	/* Config */
-	int			index;
 	int			base_pid;
 	int			service_id;
 	int			pmt_pid;
 	int			radio;
+	int			teletext;
+	int			subtitle;
+	int			record;
+	int			live;
 	char *		id;
 	char *		name;
 	/* Sources */
@@ -77,9 +87,12 @@ typedef struct {
 	/* EPG */
 	uint8_t			epg_version:5;
 
+	pthread_mutex_t eit_mutex;		
+	EPG_ENTRY 		e_now;
+	EPG_ENTRY 		e_next;
+
 	EPG_ENTRY *		epg_now;
 	EPG_ENTRY *		epg_next;
-
 	struct ts_eit *	eit_now;
 	struct ts_eit *	eit_next;
 } CHANNEL;
@@ -97,6 +110,8 @@ typedef struct {
 	uint16_t nit_pid;		/* Pid of the NIT, default 0x10 */
 	uint16_t pmt_pid;		/* Pid of the original PMT, used to replace PMT */
 	uint16_t pcr_pid;		/* PCR pid */
+	uint16_t sub_pid;		/* KDKD: Subtitle pid */
+	uint16_t txt_pid;		/* KDKD: Teletext pid */
 
 	struct ts_pat *pat;		/* The PAT */
 	struct ts_pmt *pmt;		/* The PMT */
@@ -111,11 +126,27 @@ typedef struct {
 	struct ts_pat *last_pat;		/* The last incoming PAT */
 	struct ts_pmt *last_pmt;		/* The last incoming PMT */
 } INPUT_STREAM;
-
+//#define HLS_PLAYLIST_MAX 10
+//#define HLS_PLAYLIST 3
+//#define HLS_FILE_SIZE 20000
+//#define HLS_FILE_NUM  2
+#define HLS_PLAYLIST_MAX 3001 
+#define HLS_PLAYLIST 3000
+#define HLS_FILE_SIZE 10000
+#define HLS_FILE_NUM 3000
+typedef struct {
+	FILE *f; // current file pointer
+	int l[HLS_PLAYLIST_MAX]; // id of exist pointers
+	int i; // id of curernt file
+	int start;
+	char path[200];
+} hls_data;
 typedef struct {
 	char  *name;
 	CHANNEL *channel;
 	int sock;				/* Server socket */
+	//HLS  KDKD
+	hls_data hls;
 	struct sockaddr_in src_sockname;
 	int reconnect:1,		/* Set to 1 to force proxy reconnect */
 	    connected:1,		/* It's set to 1 when proxy is connected and serving clients */
@@ -139,7 +170,10 @@ typedef struct {
 
 	CBUF *buf;				// Input buffer */
 
+	struct my_eit   eit;
 	INPUT_STREAM stream;
+	int  removed_pids[10];
+	char epg[255];
 } INPUT;
 
 typedef enum {
@@ -216,11 +250,13 @@ typedef struct {
 	uint32_t	_symbol_rate;
 } NIT;
 
-EPG_ENTRY *	epg_new			(time_t start, int duration, char *encoding, char *event, char *short_desc, char *long_desc);
-void		epg_free		(EPG_ENTRY **e);
+EPG_ENTRY *	epg_new			(EPG_ENTRY *e,time_t start, int duration, char *encoding,int encoding_code,
+							 char *event, char *short_desc, char *long_desc,char *lang);
+void		epg_free		(EPG_ENTRY *e);
 int			epg_changed		(EPG_ENTRY *a, EPG_ENTRY *b);
 
-CHANNEL *	channel_new		(int service_id, int is_radio, const char *id, const char *name, const char *source, int channel_index);
+CHANNEL *	channel_new		(int service_id, int is_radio, char *id, char *name, char *source,int
+							 tel,int sub,int rec,int live);
 void		channel_free	(CHANNEL **c);
 void		channel_free_epg(CHANNEL *c);
 
@@ -229,7 +265,7 @@ int is_rtp(char *url);
 
 CHANSRC *	chansrc_init	(char *url);
 void		chansrc_free	(CHANSRC **url);
-void		chansrc_add		(CHANNEL *c, const char *src);
+void		chansrc_add		(CHANNEL *c, char *src);
 void		chansrc_next	(CHANNEL *c);
 void		chansrc_set		(CHANNEL *c, uint8_t src_id);
 

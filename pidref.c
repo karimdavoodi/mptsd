@@ -45,7 +45,7 @@ int pidref_add(PIDREF *ref, uint16_t org_pid, uint16_t new_pid) {
 		PIDREF_ENTRY *entry = &ref->entries[i];
 		if (!entry->org_pid) {
 			entry->org_pid = org_pid;
-			entry->new_pid = new_pid;
+			entry->new_pid = new_pid;//  KDKD1
 			return 1;
 		}
 	}
@@ -91,12 +91,12 @@ int pidref_change_packet_pid(uint8_t *ts_packet, uint16_t packet_pid, PIDREF *re
 
 void pidref_dump(PIDREF *ref) {
 	int i;
-	LOGf("pidref->base_pid = 0x%04x\n", ref->base_pid);
+	LOGf("pidref->base_pid = %04d\n", ref->base_pid);
 	LOGf("pidref->num      = %d\n"    , ref->num);
 	LOG ("pidref->entries     org_pid  new_pid\n");
 	for (i=0;i<ref->num;i++) {
 		PIDREF_ENTRY *entry = &ref->entries[i];
 		if (entry->org_pid)
-			LOGf("pidref->entry[%02d] = 0x%04x   0x%04x\n", i, entry->org_pid, entry->new_pid);
+			LOGf("pidref->entry[%02d] = %04d   %04d\n", i, entry->org_pid, entry->new_pid);
 	}
 }

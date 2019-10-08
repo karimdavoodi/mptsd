@@ -32,8 +32,8 @@ void * calibrate_sleep(void *_config) {
 	CONFIG *conf = _config;
 
 	if (!conf->quiet) {
-		LOGf("\tCalibrating sleep timeout...\n");
-		LOGf("\tRequest timeout   : %ld us\n", conf->output_tmout);
+		LOGf("Calibrating sleep timeout...\n");
+		LOGf("Request timeout   : %ld us\n", conf->output_tmout);
 	}
 
 	do {
@@ -47,13 +47,15 @@ void * calibrate_sleep(void *_config) {
 	conf->output_tmout -= conf->usleep_overhead;
 
 	if (!conf->quiet) {
-		LOGf("\tusleep(1) overhead: %ld us\n", conf->usleep_overhead);
-		LOGf("\tOutput pkt tmout  : %ld us\n", conf->output_tmout);
+		LOGf("usleep(1) overhead: %ld us\n", conf->usleep_overhead);
+		LOGf("Output pkt tmout  : %ld us\n", conf->output_tmout);
 	}
+	LOGf("Bitrate:%.5f Mbps,Pkt tmout: %ld, Sleep Overhead: %ld",
+			conf->output_bitrate/1000000,conf->output_tmout,conf->usleep_overhead);
 
 	if (conf->output_tmout < 0) {
-		LOGf("usleep overhead is too high! Make sure the kernel is compiled with CONFIG_HIGH_RES_TIMERS.\n");
-		conf->output_tmout = 0;
+		LOGf("usleep overhead is too high(Output pkt tmout:%ld)!\n",conf->output_tmout);
+		//conf->output_tmout = 0;  // KDKD FIXME
 	}
 
 	pthread_exit(0);

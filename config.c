@@ -34,6 +34,8 @@
 #include <math.h>
 #include <netdb.h> // for uint32_t
 
+//#include "../dev.h"
+
 #include "libfuncs/log.h"
 #include "libfuncs/list.h"
 #include "libfuncs/server.h"
@@ -73,9 +75,9 @@ void config_free(CONFIG **pconf) {
 	if (conf) {
 		conf->output->dienow = 1;
 
-		list_free(&conf->nit, NULL, (void (*)(void **))nit_free);
-		list_free(&conf->inputs, NULL, (void (*)(void **))input_free);
-		list_free(&conf->channels, NULL, (void (*)(void **))channel_free);
+		list_free(&conf->nit, NULL,(void *) nit_free);
+		list_free(&conf->inputs, NULL, (void *)input_free);
+		list_free(&conf->channels, NULL, (void *)channel_free);
 		output_free(&conf->output);
 
 		FREE(conf->ident);
@@ -96,9 +98,10 @@ void config_free(CONFIG **pconf) {
 
 int config_load_channels(CONFIG *conf) {
 	int num_channels = 0, i, j;
+	char conf_name[255];
 
-	LOGf("CONFIG: Loading channels config %s\n", conf->channels_conf);
-	dictionary *ini = iniparser_load(conf->channels_conf);
+	sprintf(conf_name,"/opt/sms/tmp/mts_chan%s.conf",conf->channels_conf);
+	dictionary *ini = iniparser_load(conf_name);
 	if (!ini) {
 		LOGf("CONFIG: Error loading channels config (%s)\n", conf->channels_conf);
 		return 0;
@@ -110,7 +113,7 @@ int config_load_channels(CONFIG *conf) {
 	// Parse channels file
 	conf->provider_name = ini_get_string_copy(ini, NULL, "Global:provider_name");
 	conf->transport_stream_id = ini_get_int(ini, 0, "Global:transport_stream_id");
-	for (i=1;i<32;i++) {
+	for (i=1;i<42;i++) {
 		CHANNEL *channel = NULL;
 		int service_id = ini_get_int(ini, 0, "Channel%d:service_id", i);
 		if (!service_id)
@@ -129,6 +132,10 @@ int config_load_channels(CONFIG *conf) {
 			LOGf("CONFIG: Channel%d have no defined name\n", i);
 			continue;
 		}
+		int tel = ini_get_int(ini, 0, "Channel%d:teletext", i);
+		int sub = ini_get_int(ini, 0, "Channel%d:subtitle", i);
+		int rec = ini_get_int(ini, 0, "Channel%d:record"  , i);
+		int live= ini_get_int(ini, 0, "Channel%d:live"  , i);
 
 		for (j=1;j<8;j++) {
 			char *source = ini_get_string(ini, NULL, "Channel%d:source%d", i, j);
@@ -142,7 +149,7 @@ int config_load_channels(CONFIG *conf) {
 				}
 				// Init channel
 				if (channel == NULL) {
-					channel = channel_new(service_id, is_radio, id, name, source, i);
+					channel = channel_new(service_id, is_radio, id, name, source,tel,sub,rec,live);
 				} else {
 					chansrc_add(channel, source);
 				}
@@ -162,7 +169,7 @@ int config_load_channels(CONFIG *conf) {
 			list_add(channels, channel);
 		}
 	}
-//	iniparser_dump(ini, stderr);
+	//iniparser_dump(ini, stderr);
 	iniparser_freedict(&ini);
 
 	// Check for channel changes
@@ -222,7 +229,13 @@ int config_load_channels(CONFIG *conf) {
 		if (r->cookie != cookie) {
 			proxy_log(r, "Remove");
 			/* Replace channel reference with real object and instruct free_restreamer to free it */
-			r->channel = channel_new(r->channel->service_id, r->channel->radio, r->channel->id, r->channel->name, r->channel->source, r->channel->index);
+			r->channel = channel_new(r->channel->service_id, r->channel->radio, r->channel->id,
+									 r->channel->name,
+									 r->channel->source,
+									 r->channel->teletext,
+									 r->channel->subtitle,
+									 r->channel->record,
+									 r->channel->live);
 			r->freechannel = 1;
 			r->dienow = 1;
 		}
@@ -230,14 +243,15 @@ int config_load_channels(CONFIG *conf) {
 	list_unlock(conf->inputs);
 
 	/* Free old_channels */
-	list_free(&old_channels, NULL, (void (*)(void **))channel_free);
+	list_free(&old_channels, NULL, (void *)channel_free);
 
-	LOGf("CONFIG: %d channels loaded\n", num_channels);
+	//LOGf("CONFIG: %d channels loaded\n", num_channels);
 	return num_channels;
 }
 
 int config_load_global(CONFIG *conf) {
-	LOGf("CONFIG: Loading global config %s\n", conf->global_conf);
+	//LOGf("CONFIG: Loading global config %s\n", conf->global_conf);
+/*
 	dictionary *ini = iniparser_load(conf->global_conf);
 	if (!ini) {
 		LOGf("CONFIG: Error loading global config (%s)\n", conf->global_conf);
@@ -254,11 +268,22 @@ int config_load_global(CONFIG *conf) {
 	conf->timeouts.stats	= ini_get_int(ini, 0,    "Timeouts:stats");
 	//iniparser_dump(ini, stderr);
 	iniparser_freedict(&ini);
+*/
+	conf->network_id		= 12300; //conf->output->out_port - 1200; 
+	conf->timeouts.pat		= 100;
+	conf->timeouts.pmt		= 200;
+	conf->timeouts.sdt		= 500;
+	conf->timeouts.nit		= 2000;
+	conf->timeouts.eit		= 5000; /* KDKD 1000 -> 5000 */
+	conf->timeouts.tdt		= 5000;
+	conf->timeouts.tot		= 15000;
+	conf->timeouts.stats	= 2000;
 	return 1;
 }
 
 int config_load_nit(CONFIG *conf) {
-	LOGf("CONFIG: Loading nit config %s\n", conf->nit_conf);
+	//LOGf("CONFIG: Loading nit config %s\n", conf->nit_conf);
+	/*
 	dictionary *ini = iniparser_load(conf->nit_conf);
 	if (!ini) {
 		LOGf("CONFIG: Error loading nit config (%s)\n", conf->nit_conf);
@@ -279,6 +304,13 @@ int config_load_nit(CONFIG *conf) {
 	}
 	//iniparser_dump(ini, stderr);
 	iniparser_freedict(&ini);
+	*/
+	uint16_t ts_id =  conf->output->out_port - 1200; 
+	char *freq     = "0658,0000"; 
+	char *mod      = "64-QAM";
+	char *sr       = "006,8750";
+	conf->network_name = "MoojAfzar Mehregan Kish Co.";
+	list_add(conf->nit, nit_new(ts_id, freq, mod, sr));
 	return 1;
 }
 
@@ -301,8 +333,10 @@ static EPG_ENTRY *config_load_epg_entry(dictionary *ini, char *entry, char *chan
 	char *sdesc  = ini_get_string(ini, NULL, "%s-%s:sdescr", channel, entry);
 	char *ldesc  = ini_get_string(ini, NULL, "%s-%s:descr", channel, entry);
 	char *enc    = ini_get_string(ini, NULL, "%s-%s:encoding", channel, entry);
+	char *lang   = ini_get_string(ini, NULL, "%s-%s:lang", channel, entry);
 	if (start && duration && event) {
-		e = epg_new(start, duration, enc, event, sdesc, ldesc);
+		e = calloc(1,sizeof(EPG_ENTRY));
+		epg_new(e,start, duration, enc, 0x10 /*utf-8*/,event, sdesc, ldesc,lang);
 	}
 	return e;
 }
@@ -311,34 +345,40 @@ static void config_channel_init_epg(CONFIG *conf, CHANNEL *c, EPG_ENTRY *now, EP
 	int updated = 0;
 
 	if (epg_changed(now, c->epg_now)) {
-		LOGf("EPG  : %s | Now data changed\n", c->id);
 		updated++;
 	}
-
 	if (epg_changed(next, c->epg_next)) {
-		LOGf("EPG  : %s | Next data changed\n", c->id);
 		updated++;
 	}
-
-	if (!updated)
+	if (!updated){
+		//LOGf("Free unused: %p %p",now, next);
+		if(now!=NULL) FREE(now);
+		if(next!=NULL)FREE(next);
 		return;
+	}
 
 	// LOGf("EPG  : %s | Version %d\n", c->epg_version);
 	c->epg_version++;
 
-	struct ts_eit *eit_now = ts_eit_alloc_init_pf(c->service_id, conf->transport_stream_id, conf->network_id, 0, 1);
+	struct ts_eit *eit_now = ts_eit_alloc_init_pf(c->service_id, conf->transport_stream_id, 
+												  conf->network_id, 0, 1);
 	eit_now->section_header->version_number = c->epg_version;
 	if (now) {
-		ts_eit_add_short_event_descriptor(eit_now, now->event_id, 1, now->start, now->duration, now->event, now->short_desc);
-		ts_eit_add_extended_event_descriptor(eit_now, now->event_id, 1, now->start, now->duration, now->long_desc);
+		ts_eit_add_short_event_descriptor(eit_now, now->event_id, 1,now->start, now->duration, 
+										  now->event, now->short_desc,now->iso_lang);
+		//ts_eit_add_extended_event_descriptor(eit_now, now->event_id, 1, now->start, now->duration, 
+		//									 now->long_desc,now->iso_lang);
 	}
 	ts_eit_regenerate_packets(eit_now);
 
-	struct ts_eit *eit_next = ts_eit_alloc_init_pf(c->service_id, conf->transport_stream_id, conf->network_id, 1, 1);
+	struct ts_eit *eit_next = ts_eit_alloc_init_pf(c->service_id, conf->transport_stream_id, 
+												   conf->network_id, 1, 1);
 	eit_next->section_header->version_number = c->epg_version;
 	if (next) {
-		ts_eit_add_short_event_descriptor(eit_next, next->event_id, 1, next->start, next->duration, next->event, next->short_desc);
-		ts_eit_add_extended_event_descriptor(eit_next, next->event_id, 1, next->start, next->duration, next->long_desc);
+		ts_eit_add_short_event_descriptor(eit_next, next->event_id, 1, next->start, 
+										  next->duration, next->event, next->short_desc,next->iso_lang);
+		//ts_eit_add_extended_event_descriptor(eit_next, next->event_id, 1, next->start, 
+		//									 next->duration, next->long_desc,next->iso_lang);
 	}
 	ts_eit_regenerate_packets(eit_next);
 
@@ -350,10 +390,12 @@ static void config_channel_init_epg(CONFIG *conf, CHANNEL *c, EPG_ENTRY *now, EP
 	if (now || next) {
 		c->eit_now  = eit_now;
 		c->eit_next = eit_next;
-		//LOGf(" ***** NOW ******\n");
-		//ts_eit_dump(eit_now);
-		//LOGf(" ***** NEXT *****\n");
-		//ts_eit_dump(eit_next);
+		/*
+		LOGf(" ***** NOW ******\n");
+		ts_eit_dump(eit_now);
+		LOGf(" ***** NEXT *****\n");
+		ts_eit_dump(eit_next);
+		*/
 	} else {
 		ts_eit_free(&eit_now);
 		ts_eit_free(&eit_next);
@@ -368,8 +410,8 @@ int config_load_epg(CONFIG *conf) {
 			// Set config last change time
 			conf->epg_conf_mtime = st.st_mtime;
 		} else {
-			// LOGf("CONFIG: EPG config not changed since last check.\n");
-			return 0; // The config has not changed!
+			//LOGf("CONFIG: EPG config not changed since last check.\n");
+			//return 0; // The config has not changed!
 		}
 	} else {
 		// Config file not found!
@@ -378,7 +420,7 @@ int config_load_epg(CONFIG *conf) {
 		return 0;
 	}
 
-	// LOGf("CONFIG: Loading EPG config %s\n", conf->epg_conf);
+	//LOGf("CONFIG: Loading EPG config %s\n", conf->epg_conf);
 	dictionary *ini = iniparser_load(conf->epg_conf);
 	if (!ini) {
 		LOGf("CONFIG: Error parsing EPG config (%s)\n", conf->epg_conf);
@@ -387,12 +429,26 @@ int config_load_epg(CONFIG *conf) {
 	}
 
 	LNODE *lc, *lctmp;
+	EPG_ENTRY *enow = NULL;
+	EPG_ENTRY *enext = NULL; 
 	list_lock(conf->channels);
 	list_for_each(conf->channels, lc, lctmp) {
 		CHANNEL *c = lc->data;
-		EPG_ENTRY *enow  = config_load_epg_entry(ini, "now", c->id);
-		EPG_ENTRY *enext = config_load_epg_entry(ini, "next", c->id);
-		config_channel_init_epg(conf, c, enow, enext);
+		if(c->live == 0){
+			enow  = config_load_epg_entry(ini, "now", c->id);
+			enext = config_load_epg_entry(ini, "next", c->id);
+		}else{
+			//pthread_mutex_lock(&c->eit_mutex);
+			enow = (EPG_ENTRY *)calloc(1,sizeof(EPG_ENTRY));
+			memcpy(enow,&c->e_now,sizeof(EPG_ENTRY));
+			//LOGf("m Alloc %p",enow);
+			enext = (EPG_ENTRY *)calloc(1,sizeof(EPG_ENTRY));
+			memcpy(enext,&c->e_next,sizeof(EPG_ENTRY));
+			//LOGf("m Alloc %p",enext);
+			//pthread_mutex_unlock(&c->eit_mutex);
+		}
+		if(enow || enext)
+			config_channel_init_epg(conf, c, enow, enext);
 	}
 	list_unlock(conf->channels);
 	//iniparser_dump(ini, stderr);
@@ -403,7 +459,7 @@ int config_load_epg(CONFIG *conf) {
 
 extern char *program_id;
 
-static void show_usage(void) {
+static void show_usage() {
 	printf("%s\n", program_id);
 	puts(copyright);
 	puts("");
@@ -444,110 +500,120 @@ static void show_usage(void) {
 	puts("\t-E\t\tWrite input file");
 	puts("");
 }
-
 void config_load(CONFIG *conf, int argc, char **argv) {
 	int j, ttl;
 
+#define  OUTPUT_DVBT	 6
+	int lisence_capability(int type);
 	conf->multicast_ttl = 1;
 	conf->output->out_port = 5000;
 	conf->output_bitrate = 38;
 	conf->logport = 514;
 	conf->server_port = 0;
 	conf->server_socket = -1;
-
 	while ((j = getopt(argc, argv, "i:b:p:g:c:n:e:d:t:o:O:P:l:L:B:m:qDHhWE")) != -1) {
 		switch (j) {
-			case 'i':
-				conf->ident = strdup(optarg);
-				conf->logident = strdup(optarg);
-				char *c = conf->logident;
-				while (*c) {
-					if (*c=='/')
-						*c='-';
-					c++;
-				}
-				break;
-			case 'b':
-				conf->server_addr = strdup(optarg);
-				break;
-			case 'p':
-				conf->server_port = atoi(optarg);
-				break;
-			case 'd':
-				conf->pidfile = strdup(optarg);
-				break;
-			case 'g':
-				conf->global_conf = strdup(optarg);
-				break;
-			case 'c':
-				conf->channels_conf = strdup(optarg);
-				break;
-			case 'n':
-				conf->nit_conf = strdup(optarg);
-				break;
-			case 'e':
-				conf->epg_conf = strdup(optarg);
-				break;
-			case 'o':
-				if (inet_aton(optarg, &conf->output_intf) == 0) {
-					fprintf(stderr, "Invalid interface address: %s\n", optarg);
-					exit(1);
-				}
-				break;
-			case 'O':
-				if (inet_aton(optarg, &(conf->output->out_host)) == 0) {
-					fprintf(stderr, "Invalid output address: %s\n", optarg);
-					exit(1);
-				}
-				break;
-			case 'P':
-				conf->output->out_port = atoi(optarg);
-				if (!conf->output->out_port || conf->output->out_port < 1024) {
-					fprintf(stderr, "Invalid output port: %s\n", optarg);
-					exit(1);
-				}
-				break;
-			case 'm':
-				conf->pcr_mode = atoi(optarg);
-				if (conf->pcr_mode < 0 || conf->pcr_mode > 4)
-					conf->pcr_mode = 0;
-				break;
-			case 't':
-				ttl = atoi(optarg);
-				conf->multicast_ttl = (ttl && ttl < 127) ? ttl : 1;
-				break;
-			case 'l':
-				conf->loghost = strdup(optarg);
-				conf->syslog_active = 1;
-				break;
-			case 'L':
-				conf->logport = atoi(optarg);
-				break;
-			case 'B':
-				conf->output_bitrate = atof(optarg);
-				if (conf->output_bitrate < 2 || conf->output_bitrate > 75) {
-					fprintf(stderr, "Invalid output bitrate: %.2f (valid 2-75)\n", conf->output_bitrate);
-					exit(1);
-				}
-				break;
-			case 'W':
-				conf->write_output_file = 1;
-				output_open_file(conf->output);
-				break;
-			case 'E':
-				conf->write_input_file = 1;
-				break;
-			case 'D':
-				conf->debug = 1;
-				break;
-			case 'q':
-				conf->quiet = 1;
-				break;
-			case 'H':
-			case 'h':
-				show_usage();
-				exit(0);
-				break;
+		  case 'i':
+			  conf->ident = strdup(optarg);
+			  conf->logident = strdup(optarg);
+			  char *c = conf->logident;
+			  while (*c) {
+				  if (*c=='/')
+					  *c='-';
+				  c++;
+			  }
+			  break;
+		  case 'b':
+			  conf->server_addr = strdup(optarg);
+			  break;
+		  case 'p':
+			  conf->server_port = atoi(optarg);
+			  break;
+		  case 'd':
+			  conf->pidfile = strdup(optarg);
+			  break;
+		  case 'g':
+			  conf->global_conf = strdup(optarg);
+			  break;
+		  case 'c':
+			  conf->channels_conf = strdup(optarg);
+			  break;
+		  case 'n':
+			  conf->nit_conf = strdup(optarg);
+			  break;
+		  case 'e':
+			  conf->epg_conf = (char *)malloc(100);
+			  sprintf(conf->epg_conf,"/opt/sms/tmp/mts_epg%s.conf",optarg);
+			  break;
+		  case 'o':
+			  if (inet_aton(optarg, &conf->output_intf) == 0) {
+				  fprintf(stderr, "Invalid interface address: %s\n", optarg);
+				  exit(1);
+			  }
+			  break;
+		  case 'O':
+			  if (inet_aton(optarg, &(conf->output->out_host)) == 0) {
+				  fprintf(stderr, "Invalid output address: %s\n", optarg);
+				  exit(1);
+			  }
+			  break;
+		  case 'P':
+			  //KDKD port check 
+			  conf->output->out_port = atoi(optarg);
+			  /*
+			  int out_num = lisence_capability(OUTPUT_DVBT);
+			  if(conf->output->out_port > (out_num+1200) && 
+				 conf->output->out_port < 1201 ){
+				  fprintf(stderr, "Invalid output port: %s\n", optarg);
+				  exit(1);// FIXME
+			  }
+			  */
+			  if (!conf->output->out_port || conf->output->out_port < 1024) {
+				  fprintf(stderr, "Invalid output port: %s\n", optarg);
+				  exit(1);
+			  }
+			  break;
+		  case 'm':
+			  conf->pcr_mode = atoi(optarg);
+			  if (conf->pcr_mode < 0 || conf->pcr_mode > 4)
+				  conf->pcr_mode = 0;
+			  break;
+		  case 't':
+			  ttl = atoi(optarg);
+			  conf->multicast_ttl = (ttl && ttl < 127) ? ttl : 1;
+			  break;
+		  case 'l':
+			  conf->loghost = strdup(optarg);
+			  conf->syslog_active = 1;
+			  break;
+		  case 'L':
+			  conf->logport = atoi(optarg);
+			  break;
+		  case 'B':
+			  conf->output_bitrate = atof(optarg);
+			  if (conf->output_bitrate < 2 || conf->output_bitrate > 75) {
+				  fprintf(stderr, "Invalid output bitrate: %.2f (valid 2-75)\n", conf->output_bitrate);
+				  //exit(1);
+			  }
+			  break;
+		  case 'W':
+			  conf->write_output_file = 1;
+			  output_open_file(conf->output);
+			  break;
+		  case 'E':
+			  conf->write_input_file = 1;
+			  break;
+		  case 'D':
+			  conf->debug = 1;
+			  break;
+		  case 'q':
+			  conf->quiet = 1;
+			  break;
+		  case 'H':
+		  case 'h':
+			  show_usage(0);
+			  exit(0);
+			  break;
 		}
 	}
 	if (!conf->output->out_host.s_addr) {
@@ -557,8 +623,8 @@ void config_load(CONFIG *conf, int argc, char **argv) {
 	}
 	// Set defaults
 	if (!conf->ident) {
-		conf->ident = strdup("ux/mptsd");
-		conf->logident = strdup("ux-mptsd");
+		conf->ident = strdup("mptsd");
+		conf->logident = strdup("mptsd");
 	}
 	if (!conf->global_conf) {
 		conf->global_conf = strdup("mptsd.conf");
@@ -570,15 +636,14 @@ void config_load(CONFIG *conf, int argc, char **argv) {
 		conf->nit_conf = strdup("mptsd_nit.conf");
 	}
 	if (!conf->epg_conf) {
-		conf->epg_conf = strdup("mptsd_epg.conf");
+		conf->epg_conf = strdup("/opt/sms/tmp/mts_epg.conf");
 	}
 
 	// Align bitrate to 1 packet (1316 bytes)
-	conf->output_bitrate        *= 1000000; // In bytes
-	conf->output_packets_per_sec = ceil(conf->output_bitrate / (1316 * 8));
+	conf->output_bitrate        *= 1000000; 
+	conf->output_packets_per_sec = ceil(conf->output_bitrate / (1316 * 8)); // KDKD ceil -> floor
 	conf->output_bitrate         = conf->output_packets_per_sec * (1316 * 8);
 	conf->output_tmout           = 1000000 / conf->output_packets_per_sec;
-
 	if (conf->server_port)
 		init_server_socket(conf->server_addr, conf->server_port, &conf->server, &conf->server_socket);
 
@@ -602,11 +667,11 @@ void config_load(CONFIG *conf, int argc, char **argv) {
 		printf("\tOutput pkt tmout  : %ld us\n", conf->output_tmout);
 		printf("\tPackets per second: %ld\n", conf->output_packets_per_sec);
 		printf("\tPCR mode          : %s\n",
-			conf->pcr_mode == 0 ? "Do not touch PCRs" :
-			conf->pcr_mode == 1 ? "Move PCRs to their calculated place" :
-			conf->pcr_mode == 2 ? "Rewrite PCRs using output bitrate" :
-			conf->pcr_mode == 3 ? "Move PCRs and rewrite them" : "???"
-		);
+			   conf->pcr_mode == 0 ? "Do not touch PCRs" :
+			   conf->pcr_mode == 1 ? "Move PCRs to their calculated place" :
+			   conf->pcr_mode == 2 ? "Rewrite PCRs using output bitrate" :
+			   conf->pcr_mode == 3 ? "Move PCRs and rewrite them" : "???"
+			  );
 		if (conf->write_output_file)
 			printf("\tWrite output file\n");
 		if (conf->write_input_file)
@@ -628,7 +693,7 @@ void config_load(CONFIG *conf, int argc, char **argv) {
 	if (!config_load_global(conf))
 		goto ERR;
 	if (!config_load_nit(conf))
-		goto ERR;
+		goto ERR; 
 	if (!config_load_channels(conf))
 		goto ERR;
 
